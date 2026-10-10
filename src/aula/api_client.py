@@ -123,6 +123,11 @@ _MARKABLE_MESSAGE_TYPES = ("Message", "MessageEdited", "MessageDeleted", "AutoRe
 # Upper bound on pages of 20 read while looking for a message in one thread.
 _MAX_THREAD_PAGES = 50
 
+# Pauses before each retry of a request Aula answered with HTTP 429.
+_RATE_LIMIT_BACKOFF_SECONDS = (3.0,)
+# A larger Retry-After than this is ignored in favour of the pause above.
+_RATE_LIMIT_MAX_RETRY_AFTER = 30
+
 
 class ThreadScanLimitError(Exception):
     """Raised when a thread's first pages hold no message, but Aula reports more pages."""
@@ -324,6 +329,39 @@ class AulaApiClient:
             finally:
                 self._auth_refresh_context.reset(refresh_context_token)
 
+    async def _request_with_rate_limit_backoff(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: object | None = None,
+    ) -> HttpResponse:
+        """Send one request, waiting and retrying while Aula answers 429.
+
+        Aula rate-limits bursts of calls and the limit clears again within
+        seconds, so a 429 is retried once after a short pause
+        (``Retry-After`` is honoured when it is a small number of seconds).
+        If it is still 429 afterwards the response is returned unchanged, so
+        callers see the same error as before.
+        """
+        response = await self._client.request(
+            method, url, headers=headers, params=params, json=json
+        )
+        for delay in _RATE_LIMIT_BACKOFF_SECONDS:
+            if response.status_code != 429:
+                break
+            retry_after = response.headers.get("retry-after", "")
+            if retry_after.isdigit() and int(retry_after) <= _RATE_LIMIT_MAX_RETRY_AFTER:
+                delay = float(retry_after)
+            _LOGGER.warning("Rate limited (HTTP 429), retrying in %.0fs", delay)
+            await asyncio.sleep(delay)
+            response = await self._client.request(
+                method, url, headers=headers, params=params, json=json
+            )
+        return response
+
     async def _do_request(
         self,
         method: str,
@@ -364,7 +402,7 @@ class AulaApiClient:
         for _attempt in range(max_retries):
             api_method = _extract_api_method(url, params)
             start = time.monotonic()
-            response = await self._client.request(
+            response = await self._request_with_rate_limit_backoff(
                 method, url, headers=headers, params=params, json=json
             )
             elapsed = time.monotonic() - start

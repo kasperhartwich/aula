@@ -208,6 +208,9 @@ def cli(
         ctx.obj["MITID_USERNAME"] = username
 
 
+# Pause between per-thread message fetches, to stay under Aula's burst rate limit.
+_THREAD_FETCH_PAUSE_SECONDS = 0.5
+
 _QR_FRAME_SECONDS = 1.0
 _QR_FIRST_FRAME_SECONDS = 2.0
 _QR_HEADER = (
@@ -997,14 +1000,20 @@ async def messages(ctx, limit, unread, search, folders):
 
         if ctx.obj.get("OUTPUT_FORMAT") == "json":
             json_threads = []
-            for thread in threads:
+            for index, thread in enumerate(threads):
                 t = dict(thread)
+                if index:
+                    # Aula rate-limits bursts of per-thread calls (HTTP 429).
+                    await asyncio.sleep(_THREAD_FETCH_PAUSE_SECONDS)
                 try:
                     messages_list: list[Message] = await client.get_messages_for_thread(
                         thread.thread_id
                     )
                     t["messages"] = [dict(m) for m in messages_list]
-                except Exception:
+                except Exception as e:
+                    logging.getLogger(__name__).warning(
+                        "Could not fetch messages for thread %s: %s", thread.thread_id, e
+                    )
                     t["messages"] = []
                 json_threads.append(t)
             click.echo(to_json(json_threads))

@@ -90,6 +90,63 @@ class TestRequestWithVersionRetry:
         assert client._client.request.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_429_waits_and_retries(self, client, monkeypatch):
+        """A 429 is retried after a pause and the later answer is returned."""
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay):
+            sleeps.append(delay)
+
+        monkeypatch.setattr("aula.api_client.asyncio.sleep", fake_sleep)
+        client._client.request = AsyncMock(
+            side_effect=[
+                HttpResponse(status_code=429, data=None),
+                HttpResponse(status_code=200, data={"ok": True}),
+            ]
+        )
+        resp = await client._request_with_version_retry(
+            "get", "https://www.aula.dk/api/v23?method=test"
+        )
+        assert resp.status_code == 200
+        assert sleeps == [3.0]
+
+    @pytest.mark.asyncio
+    async def test_429_gives_up_and_returns_the_429(self, client, monkeypatch):
+        """A 429 that never clears is returned after the last retry."""
+
+        async def fake_sleep(delay):
+            pass
+
+        monkeypatch.setattr("aula.api_client.asyncio.sleep", fake_sleep)
+        client._client.request = AsyncMock(return_value=HttpResponse(status_code=429, data=None))
+        resp = await client._request_with_version_retry(
+            "get", "https://www.aula.dk/api/v23?method=test"
+        )
+        assert resp.status_code == 429
+        assert client._client.request.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_429_honours_a_small_retry_after(self, client, monkeypatch):
+        """A numeric Retry-After within the limit replaces the default pause."""
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay):
+            sleeps.append(delay)
+
+        monkeypatch.setattr("aula.api_client.asyncio.sleep", fake_sleep)
+        client._client.request = AsyncMock(
+            side_effect=[
+                HttpResponse(status_code=429, data=None, headers={"retry-after": "2"}),
+                HttpResponse(status_code=200, data={"ok": True}),
+            ]
+        )
+        resp = await client._request_with_version_retry(
+            "get", "https://www.aula.dk/api/v23?method=test"
+        )
+        assert resp.status_code == 200
+        assert sleeps == [2.0]
+
+    @pytest.mark.asyncio
     async def test_concurrent_auth_failures_share_one_refresh_and_both_retry(self):
         """Concurrent callers wait for one refresh and both replay successfully."""
         both_initial_requests_started = asyncio.Event()
