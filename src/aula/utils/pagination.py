@@ -3,10 +3,12 @@
 import json
 
 from ..models.pagination import PaginationResult, TerminationReason
+from .mapping import get_in
 
 
 class PaginationState:
-    def __init__(self):
+    def __init__(self, id_path: str = "id"):
+        self.id_path = id_path
         self.items: list[dict] = []
         self.seen_ids: set[str] = set()
         self.seen_pages: set[str] = set()
@@ -36,8 +38,8 @@ class PaginationState:
         self.seen_pages.add(signature)
         before = len(self.items)
         for row in rows:
-            identifier = row.get("id")
-            if isinstance(identifier, (str, int)) and str(identifier):
+            identifier = get_in(row, self.id_path)
+            if identifier:
                 key = str(identifier)
                 if key in self.seen_ids:
                     continue
