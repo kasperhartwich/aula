@@ -175,6 +175,29 @@ class TestRequestWithVersionRetry:
         assert sleeps == []
 
     @pytest.mark.asyncio
+    async def test_429_with_an_http_date_retry_after_is_not_retried(self, client, monkeypatch):
+        """A Retry-After we cannot parse (an HTTP date) returns the 429 without a retry."""
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay):
+            sleeps.append(delay)
+
+        monkeypatch.setattr("aula.api_client.asyncio.sleep", fake_sleep)
+        client._client.request = AsyncMock(
+            return_value=HttpResponse(
+                status_code=429,
+                data=None,
+                headers={"retry-after": "Fri, 13 Nov 2026 12:00:00 GMT"},
+            )
+        )
+        resp = await client._request_with_version_retry(
+            "get", "https://www.aula.dk/api/v23?method=test"
+        )
+        assert resp.status_code == 429
+        assert client._client.request.call_count == 1
+        assert sleeps == []
+
+    @pytest.mark.asyncio
     async def test_concurrent_auth_failures_share_one_refresh_and_both_retry(self):
         """Concurrent callers wait for one refresh and both replay successfully."""
         both_initial_requests_started = asyncio.Event()
