@@ -413,7 +413,8 @@ class AulaApiClient:
         Aula rate-limits bursts of calls and the limit clears again within
         seconds, so a 429 is retried once after a short pause
         (``Retry-After`` is honoured when it is a small number of seconds; a
-        longer one means no retry at all). If it is still 429 afterwards the
+        longer one, or one that is not a plain number, means no retry at
+        all). If it is still 429 afterwards the
         response is returned unchanged, so callers see the same error as
         before.
         """
@@ -424,10 +425,11 @@ class AulaApiClient:
             if response.status_code != 429:
                 break
             retry_after = response.headers.get("retry-after", "")
-            if retry_after.isdigit():
-                if int(retry_after) > _RATE_LIMIT_MAX_RETRY_AFTER:
-                    # The server asks for longer than we will wait: a retry
-                    # sooner would only prolong the throttling.
+            if retry_after:
+                if not retry_after.isdigit() or int(retry_after) > _RATE_LIMIT_MAX_RETRY_AFTER:
+                    # The server asks for longer than we will wait, or in a
+                    # form we do not parse (an HTTP date): a retry sooner
+                    # would only prolong the throttling.
                     break
                 delay = float(retry_after)
             _LOGGER.warning("Rate limited (HTTP 429), retrying in %.0fs", delay)
